@@ -1,5 +1,13 @@
 # Load the workspace with data:
+setwd("~/Desktop/ZhuangRScript")
 load("DZWorkspace.RData")
+
+# Use parallel processing to speed up the GAMM models
+require(parallel) 
+nc <- 10   ## cluster size, set for example portability
+    if (detectCores()>1) { ## no point otherwise
+      cl <- makeCluster(nc) 
+    } else cl <- NU
 
 # Linear Mixed Model analysis of rhyme duration
 library(lme4)
@@ -8,6 +16,7 @@ library(emmeans)
 library(MuMIn) # needed for r.squaredGLMM function
 library(car) # needed to run Type II ANOVA, rather than type III
 library(ggplot2)
+library(tictoc)
 
 # Perform the analysis on all data together (nesting structures included)
 lm1 <- lmer(Duration ~ checked + ReclassifiedVowelLength + ReclassifiedTone + (1|VowelQuality) + (1|Speaker) + (1|WordId), data = durdata)
@@ -208,7 +217,7 @@ gridf0ch$ssaSE <- predict(ssafitf0ch, gridf0ch, se = T)$se.fit
 # GAMM analysis
 library(mgcv)
 library(itsadug)
-
+    
 # Identify first measurement in each trajectory:
 pitchdatauc$start.event <- pitchdatauc$relTime == 0
 
@@ -216,128 +225,194 @@ pitchdatauc$start.event <- pitchdatauc$relTime == 0
 # We use method = fREML when running the model from now on to save time
 # Method = ML can be used when comparing models for significance but this is resource-intensive
 
+tic()
 gamucbase <- bam(cents ~ ReclassifiedTone +
-	s(normT, bs = "ad") +
-	s(normT, by = ReclassifiedTone) +
-	s(normT, by = OnsType) +
-	# random smooths for the interaction between Speaker & Tone & for vowel quality
-	s(normT, SpTone, bs = "fs", m = 1) +
-	s(normT, VowelQuality, bs = "fs", m =1),
-	data = pitchdatauc, method = "fREML", discrete = T)
+	s(relTime, bs = "ad", k = 30) +
+	s(relTime, by = ReclassifiedTone, k = 30) +
+	s(Speaker, bs="re")+
+	s(VowelQuality, bs="re")+
+	s(WordId, bs="re")+
+	s(OnsType, bs="re") +
+	s(relTime, Speaker, by = ReclassifiedTone, bs = "fs", m = 1, k = 30) +
+	s(relTime, VowelQuality, by = ReclassifiedTone, bs = "fs", m = 1, k=30)+
+	s(relTime, WordId,  by = ReclassifiedTone, bs = "fs", m = 1, k=30)+
+	s(relTime, OnsType,  by = ReclassifiedTone, bs = "fs", m = 1, k=30),
+	data = pitchdatauc, method = "fREML", discrete = T, chunk.size = 5000, cluster = cl)
+toc()
 	
 # Get a rough estimate of the correlation between adjacent errors:
 ruc <- start_value_rho(gamucbase)
-	
-gamucarad <- bam(cents ~ ReclassifiedTone +
-	s(normT, bs = "ad") +
-	s(normT, by = ReclassifiedTone) +
-	s(normT, by = OnsTyp) +
-	# random smooths for the interaction between Speaker & Tone & for vowel quality
-	s(normT, SpTone, bs = "fs", m = 1) +
-	s(normT, VowelQuality, bs = "fs", m =1),
-	data = pitchdatauc, method = "fREML", AR.start = pitchdatauc$start.event, rho = ruc, discrete = T)
 
+# Model for unchecked tones including residual autocorrelation
+tic()
+gamuc <- bam(cents ~ ReclassifiedTone +  
+s(relTime, bs = "ad",  k=30)+
+s(relTime, by= ReclassifiedTone,  k=30)+ 
+s(Speaker, bs="re")+ #random intercept
+s(VowelQuality, bs="re")+ #random intercept 
+s(WordId, bs="re")+ #random intercept
+s(OnsType, bs="re")+ #random intercept
+s(relTime, Speaker,  by = ReclassifiedTone, bs = "fs", m = 1, k=30)+
+s(relTime, VowelQuality, by = ReclassifiedTone, bs = "fs", m = 1, k=30)+
+s(relTime, WordId,  by = ReclassifiedTone, bs = "fs", m = 1, k=30)+
+s(relTime, OnsType,  by = ReclassifiedTone, bs = "fs", m = 1, k=30),
+AR.start = pitchdatauc$start.event,  rho = ruc,
+data= pitchdatauc, method="fREML",
+discrete = T, chunk.size=5000,cluster=cl)
+toc()
+
+gamucsummary <- summary(gamuc)
+			
 # Check the residual autocorrelation (should be below +/- 0.2 at lag 1 and beyond)
-acf_resid(gamucarad, split_pred="AR.start")
+acf_resid(gamuc, split_pred="AR.start")
 
-# Plots:
-# Check effect of onset type
-plot_smooth(gamucarad, view = "normT", plot_all="OnsType", rug = F,  rm.ranef = T, col = colorScale, xlab = "Normalized time", ylab = "F0 (cents)")
-# voiceless obstruents raise f0 at the start of the rhyme; voiced stop onsets seem to have no effect on f0 initially so use this level in cond = in the plot_smooth
+# =============
 
-# Set min & max f0
-minf0 = -450
-maxf0 = 450
-
-# Figure 7 left side: Plot model for voiced stop onsets
-png("GAMMUC_Jan6.png")
-plot_smooth(gamucarad, view = "normT", plot_all="ReclassifiedTone", cond = list(OnsType ='voiced stop'), rug = F,  rm.ranef = T, col = colorScale, xlab = "Normalized time", ylab = "F0 (cents)", ylim = c(minf0,maxf0))
-dev.off()
-
-# ==========================
-
-# Model for checked tones only
+# Model for CVO tones only
 # Identify first measurement in each trajectory:
-pitchdatach$start.event <- pitchdatach$relTime == 0
+pitchdatacvo$start.event <- pitchdatacvo$relTime == 0
 
-# Create a model without auto-correlation and use it get an estimate of the amount of autocorrelation:
-gamchbase <- bam(cents ~ ReclassifiedTone +
-	s(normT, bs = "ad") +
-	s(normT, by = ReclassifiedTone) +
-	s(normT, by = OnsType) +
-	# random smooths for the interaction between Speaker & Tone & VowelQuality
-	s(normT, SpTone, bs = "fs", m = 1) +
-	s(normT, VowelQuality, bs = "fs", m = 1),
-	data = pitchdatach, method = "fREML", discrete = T)
+# Create a model for CVO tones without auto-correlation and use it get an estimate of the amount of autocorrelation:
+# # gamcvobase <- bam(cents ~ ReclassifiedTone +
+	# s(relTime, bs = "ad") +
+	# s(relTime, by = ReclassifiedTone, bs = "ad") +
+	# s(Speaker, bs="re")+ 
+	# s(VowelQuality, bs="re")+ 
+	# s(OnsType, bs="re")+ 
+	# s(relTime, Speaker, by = ReclassifiedTone, bs = "fs", m = 1),
+	# data = pitchdatacvo, method = "fREML", discrete = T)
+	
+tic()
+gamcvobase <- bam(cents ~ ReclassifiedTone +  
+s(relTime, bs = "ad")+
+s(relTime, by= ReclassifiedTone)+ 
+s(Speaker, bs="re")+ #random intercept
+s(VowelQuality, bs="re")+ #random intercept 
+s(WordId, bs="re")+ #random intercept
+s(OnsType, bs="re")+ #random intercept
+s(relTime, Speaker,  by = ReclassifiedTone, bs = "fs", m = 1)+
+s(relTime, VowelQuality, by = ReclassifiedTone, bs = "fs", m = 1)+
+s(relTime, WordId,  by = ReclassifiedTone, bs = "fs", m = 1)+
+s(relTime, OnsType,  by = ReclassifiedTone, bs = "fs", m = 1),
+data= pitchdatacvo, method="fREML",
+discrete = T, chunk.size=5000,cluster=cl)
+toc()
 	
 # Get a rough estimate of the correlation between adjacent errors:
-rch <- start_value_rho(gamchbase)
+rcvo <- start_value_rho(gamcvobase)
 
-# Using adaptive smoothing, bs = "ad" to allow for different amounts of wiggliness at different times in each f0 contour
-gamcharad <- bam(cents ~ ReclassifiedTone +
-	s(normT, bs = "ad") +
-	s(normT, by = ReclassifiedTone) +
-	s(normT, by = OnsType) +
-	# random smooths for the interaction between Speaker & Tone & VowelQuality
-	s(normT, SpTone, bs = "fs", m = 1)	+
-	s(normT, VowelQuality, bs = "fs", m = 1),
-	data = pitchdatach, method = "fREML", AR.start = pitchdatach$start.event, rho = rch, discrete = T)
+# Model for CVO tones including residual autocorrelation
+# gamcvo <- bam(cents ~ ReclassifiedTone + 
+			# s(relTime, bs = "ad")+
+			# s(relTime, by= ReclassifiedTone, bs = "ad")+
+			# s(Speaker, bs="re")+
+			# s(VowelQuality, bs="re")+
+			# s(OnsType, bs="re")+
+ 			# s(relTime, Speaker, by= ReclassifiedTone, bs = "fs", m = 1),
+			# AR.start = pitchdatacvo$start.event, 
+			# rho = rcvo,
+			# data= pitchdatacvo, method="ML",
+			# discrete = T, chunk.size=5000,
+			# cluster=cl)
+
+tic()
+gamcvo <- bam(cents ~ ReclassifiedTone +  
+s(relTime, bs = "ad")+
+s(relTime, by= ReclassifiedTone)+ 
+s(Speaker, bs="re")+ #random intercept
+s(VowelQuality, bs="re")+ #random intercept 
+s(WordId, bs="re")+ #random intercept
+s(OnsType, bs="re")+ #random intercept
+s(relTime, Speaker,  by = ReclassifiedTone, bs = "fs", m = 1)+
+s(relTime, VowelQuality, by = ReclassifiedTone, bs = "fs", m = 1)+
+s(relTime, WordId,  by = ReclassifiedTone, bs = "fs", m = 1)+
+s(relTime, OnsType,  by = ReclassifiedTone, bs = "fs", m = 1),
+AR.start = pitchdatacvo$start.event,  rho = rcvo,
+data= pitchdatacvo, method="fREML",
+discrete = T, chunk.size=5000,cluster=cl)
+toc()
+
+gamcvosummary <- summary(gamcvo)
 
 # Check the residual autocorrelation (should be below +/- 0.2 at lag 1 and beyond)
-acf_resid(gamcharad, split_pred="AR.start")
+acf_resid(gamcvo, split_pred="AR.start")
 
-# Plot model with onstype set to voiced stop onsets
-png("GAMMch_Jan6.png")
-plot_smooth(gamcharad, view = "normT", plot_all="ReclassifiedTone", cond = list(OnsType ='voiced stop'), rug = F,  rm.ranef = T, col = colorScaleschecked, xlab = "Normalized time", ylab = "", ylim = c(minf0,maxf0), legend_plot_all = "bottom")
-dev.off()
+# =============
 
-# Check for differences between tones 8 and 9, which overlap quite a bit:
-plot_diff(gamcharad, view = "normT", comp = list(ReclassifiedTone = c("8", "9")))
+# Model for CVVO tones only
+# Identify first measurement in each trajectory:
+pitchdatacvvo$start.event <- pitchdatacvvo$relTime == 0
 
-# ========
+# Create a model for CVVO tones without auto-correlation and use it get an estimate of the amount of autocorrelation:
+# gamcvvobase <- bam(cents ~ ReclassifiedTone +
+	# s(relTime, bs = "ad") +
+	# s(relTime, by = ReclassifiedTone, bs = "ad") +
+	# s(Speaker, bs="re")+ 
+	# s(VowelQuality, bs="re")+ 
+	# s(OnsType, bs="re")+ 
+	# s(relTime, Speaker, by = ReclassifiedTone, bs = "fs", m = 1),
+	# data = pitchdatacvvo, method = "fREML", discrete = T)
 
-# GAMM for checked tones with absolute time:
-# Create a model without auto-correlation and use it get an estimate of the amount of autocorrelation:
-gamchrtbase <- bam(cents ~ ReclassifiedTone +
-	s(relTime, bs = "ad") +
-	s(relTime, by = ReclassifiedTone) +
-	s(relTime, by = OnsType) +
-	# random smooths for the interaction between Speaker & Tone & VowelQuality
-	s(relTime, SpTone, bs = "fs", m = 1) +
-	s(relTime, VowelQuality, bs = "fs", m = 1),
-	data = pitchdatach, method = "fREML", discrete = T)
-	
+tic()
+gamcvvobase <- bam(cents ~ ReclassifiedTone +  
+s(relTime, bs = "ad")+
+s(relTime, by= ReclassifiedTone)+ 
+s(Speaker, bs="re")+ #random intercept
+s(VowelQuality, bs="re")+ #random intercept 
+s(WordId, bs="re")+ #random intercept
+s(OnsType, bs="re")+ #random intercept
+s(relTime, Speaker,  by = ReclassifiedTone, bs = "fs", m = 1)+
+s(relTime, VowelQuality, by = ReclassifiedTone, bs = "fs", m = 1)+
+s(relTime, WordId,  by = ReclassifiedTone, bs = "fs", m = 1)+
+s(relTime, OnsType,  by = ReclassifiedTone, bs = "fs", m = 1),
+data= pitchdatacvvo, method="fREML",
+discrete = T, chunk.size=5000,cluster=cl)
+toc()
+
 # Get a rough estimate of the correlation between adjacent errors:
-rchrt <- start_value_rho(gamchrtbase)
+rcvvo <- start_value_rho(gamcvvobase)
 
-# Using adaptive smoothing, bs = "ad" to allow for different amounts of wiggliness at different times in each f0 contour
-gamchrtarad <- bam(cents ~ ReclassifiedTone +
-	s(relTime, bs = "ad") +
-	s(relTime, by = ReclassifiedTone) +
-	s(relTime, by = OnsType) +
-	# random smooths for the interaction between Speaker & Tone
-	s(relTime, SpTone, bs = "fs", m = 1) +
-	s(relTime, VowelQuality, bs = "fs", m = 1),
-	data = pitchdatach, method = "fREML", AR.start = pitchdatach$start.event, rho = rchrt, discrete = T)
+# Model for CVVO tones including residual autocorrelation
+# gamcvvo <- bam(cents ~ ReclassifiedTone + 
+			# s(relTime, bs = "ad")+
+			# s(relTime, by= ReclassifiedTone, bs = "ad")+
+			# s(Speaker, bs="re")+
+			# s(VowelQuality, bs="re")+
+			# s(OnsType, bs="re")+ 
+ 			# s(relTime, Speaker, by= ReclassifiedTone, bs = "fs", m = 1),
+			# AR.start = pitchdatacvvo$start.event, 
+			# rho = rcvvo,
+			# data= pitchdatacvvo, method="ML",
+			# discrete = T, chunk.size=5000,
+			# cluster=cl)
+
+tic()
+gamcvvo <- bam(cents ~ ReclassifiedTone +  
+s(relTime, bs = "ad")+
+s(relTime, by= ReclassifiedTone)+ 
+s(Speaker, bs="re")+ #random intercept
+s(VowelQuality, bs="re")+ #random intercept 
+s(WordId, bs="re")+ #random intercept
+s(OnsType, bs="re")+ #random intercept
+s(relTime, Speaker,  by = ReclassifiedTone, bs = "fs", m = 1)+
+s(relTime, VowelQuality, by = ReclassifiedTone, bs = "fs", m = 1)+
+s(relTime, WordId,  by = ReclassifiedTone, bs = "fs", m = 1)+
+s(relTime, OnsType,  by = ReclassifiedTone, bs = "fs", m = 1),
+AR.start = pitchdatacvvo$start.event,  rho = rcvvo,
+data= pitchdatacvvo, method="fREML",
+discrete = T, chunk.size=5000,cluster=cl)
+toc()
+
+gamcvvosummary <- summary(gamcvvo)
 
 # Check the residual autocorrelation (should be below +/- 0.2 at lag 1 and beyond)
-acf_resid(gamchrtarad, split_pred="AR.start")
-
-# Plot using voiced stop onsets
-png("GAMMchRelT_Jan6.png")
-plot_smooth(gamchrtarad, view = "relTime", plot_all="ReclassifiedTone", cond = list(OnsType ='voiced stop'), rug = F,  rm.ranef = T, col = colorScaleschecked, xlab = "Time (ms)", ylab = "F0 (cents)", xlim = c(0,250), ylim = c(-600,700))
-dev.off()
-
-# Check for differences between tones 8 and 9, which overlap quite a bit:
-plot_diff(gamchrtarad, view = "relTime", comp = list(ReclassifiedTone = c("8", "9")))
-# No difference in absolute time, suggesting duration is crucial in recognizing the difference between tones 8 and 9!
+acf_resid(gamcvvo, split_pred="AR.start")
 
 # ============================================================================
 
 # This section creates plots
 library(ggplot2)
 library(ggpubr)
-library(extrafont)
 
 # Set working directory to plots folder
 setwd("~/Desktop/ZhuangRScript/Plots")
@@ -499,7 +574,6 @@ ndurbytone <- ggplot(nldzuc, aes(x = ToneVL, y = emmean, ymin = lower.CL, ymax =
 		y = "Nasal duration (ms)")+
 	themedurbasic
 ggsave(filename = "Fig5.png", plot = ndurbytone, dpi = plotres)
-
 
 # =======================================================
 
@@ -689,7 +763,24 @@ ssapf0DZgrey <- annotate_figure(ssapf0DZgrey,
 	left = text_grob("F0 (Cents re. median F0/Speaker)", size = axtisize, rot = 90, family = fonttype))
 ggsave(filename = "ssanovaf0DZ_grey_v3.png", ssapf0DZgrey, path = plotpathspeakers, width = 2*plotwidth, height = plotheight, units = plotunits, dpi = plotres)
 
-# ===============================================================================================
+# =====================================================================================
+
+# Figure 7 left side: Plot model for unchecked syllables with voiced stop onsets
+png("GAMMUC_Jan19.png", width = 3.25, height = 3.25, units = "in", res = 300, pointsize = 8)
+plot_smooth(gamuc, view = "relTime", plot_all="ReclassifiedTone", rug = F,  rm.ranef = T, col = colorScale, xlab = "Time (ms)", ylab = "F0 (cents)")
+dev.off()
+
+# Figure 7: model for CVO syllables: 
+png("GAMMCVO_Jan19.png", width = 3.25, height = 3.25, units = "in", res = 300, pointsize = 8)
+plot_smooth(gamcvo, view = "relTime", plot_all="ReclassifiedTone", rug = F,  rm.ranef = T, col = colorScaleCVO, xlab = "Time (ms)", ylab = "F0 (cents)")
+dev.off()
+
+# Figure 7: model for CVVO syllables:
+png("GAMMCVVO_Jan19.png", width = 3.25, height = 3.25, units = "in", res = 300, pointsize = 8)
+plot_smooth(gamcvvo, view = "relTime", plot_all="ReclassifiedTone", rug = F,  rm.ranef = T, col = colorScaleCVVO, xlab = "Time (ms)", ylab = "F0 (cents)")
+dev.off()
+
+# =====================================================================================
 
 # Figures 8 to 12 - f0 contours for selections of tones, one speaker per panel
 
@@ -735,9 +826,9 @@ ymin = -500
 ymax = 250
 
 # Choose which set of tones to display below and the appropriate color scale
-tns <- dz56910
-colsc <- colorscale56910
-pngname <- "DZAllotones56910"
+tns <- dz246810
+colsc <- colorscale8
+pngname <- "DZAllotones8"
 
 for (i in 1:length(dzspeakers)){
 	spkr = dzspeakers[i]
