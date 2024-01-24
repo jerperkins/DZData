@@ -4,7 +4,7 @@ load("DZWorkspace.RData")
 
 # Use parallel processing to speed up the GAMM models
 require(parallel) 
-nc <- 10   ## cluster size, set for example portability
+nc <- 8   ## cluster size, set for example portability
     if (detectCores()>1) { ## no point otherwise
       cl <- makeCluster(nc) 
     } else cl <- NU
@@ -261,7 +261,10 @@ data= pitchdatauc, method="fREML",
 discrete = T, chunk.size=5000,cluster=cl)
 toc()
 
-gamucsummary <- summary(gamuc)
+# For summary, re.test = F option saves time by removing the random effects. This is done because the summary doesn't finish within a few days even on a very fast processor.
+tic()
+gamucsummary <- summary(gamuc, re.test = F)
+toc()
 			
 # Check the residual autocorrelation (should be below +/- 0.2 at lag 1 and beyond)
 acf_resid(gamuc, split_pred="AR.start")
@@ -273,15 +276,6 @@ acf_resid(gamuc, split_pred="AR.start")
 pitchdatacvo$start.event <- pitchdatacvo$relTime == 0
 
 # Create a model for CVO tones without auto-correlation and use it get an estimate of the amount of autocorrelation:
-# # gamcvobase <- bam(cents ~ ReclassifiedTone +
-	# s(relTime, bs = "ad") +
-	# s(relTime, by = ReclassifiedTone, bs = "ad") +
-	# s(Speaker, bs="re")+ 
-	# s(VowelQuality, bs="re")+ 
-	# s(OnsType, bs="re")+ 
-	# s(relTime, Speaker, by = ReclassifiedTone, bs = "fs", m = 1),
-	# data = pitchdatacvo, method = "fREML", discrete = T)
-	
 tic()
 gamcvobase <- bam(cents ~ ReclassifiedTone +  
 s(relTime, bs = "ad")+
@@ -300,20 +294,6 @@ toc()
 	
 # Get a rough estimate of the correlation between adjacent errors:
 rcvo <- start_value_rho(gamcvobase)
-
-# Model for CVO tones including residual autocorrelation
-# gamcvo <- bam(cents ~ ReclassifiedTone + 
-			# s(relTime, bs = "ad")+
-			# s(relTime, by= ReclassifiedTone, bs = "ad")+
-			# s(Speaker, bs="re")+
-			# s(VowelQuality, bs="re")+
-			# s(OnsType, bs="re")+
- 			# s(relTime, Speaker, by= ReclassifiedTone, bs = "fs", m = 1),
-			# AR.start = pitchdatacvo$start.event, 
-			# rho = rcvo,
-			# data= pitchdatacvo, method="ML",
-			# discrete = T, chunk.size=5000,
-			# cluster=cl)
 
 tic()
 gamcvo <- bam(cents ~ ReclassifiedTone +  
@@ -344,15 +324,6 @@ acf_resid(gamcvo, split_pred="AR.start")
 pitchdatacvvo$start.event <- pitchdatacvvo$relTime == 0
 
 # Create a model for CVVO tones without auto-correlation and use it get an estimate of the amount of autocorrelation:
-# gamcvvobase <- bam(cents ~ ReclassifiedTone +
-	# s(relTime, bs = "ad") +
-	# s(relTime, by = ReclassifiedTone, bs = "ad") +
-	# s(Speaker, bs="re")+ 
-	# s(VowelQuality, bs="re")+ 
-	# s(OnsType, bs="re")+ 
-	# s(relTime, Speaker, by = ReclassifiedTone, bs = "fs", m = 1),
-	# data = pitchdatacvvo, method = "fREML", discrete = T)
-
 tic()
 gamcvvobase <- bam(cents ~ ReclassifiedTone +  
 s(relTime, bs = "ad")+
@@ -373,19 +344,6 @@ toc()
 rcvvo <- start_value_rho(gamcvvobase)
 
 # Model for CVVO tones including residual autocorrelation
-# gamcvvo <- bam(cents ~ ReclassifiedTone + 
-			# s(relTime, bs = "ad")+
-			# s(relTime, by= ReclassifiedTone, bs = "ad")+
-			# s(Speaker, bs="re")+
-			# s(VowelQuality, bs="re")+
-			# s(OnsType, bs="re")+ 
- 			# s(relTime, Speaker, by= ReclassifiedTone, bs = "fs", m = 1),
-			# AR.start = pitchdatacvvo$start.event, 
-			# rho = rcvvo,
-			# data= pitchdatacvvo, method="ML",
-			# discrete = T, chunk.size=5000,
-			# cluster=cl)
-
 tic()
 gamcvvo <- bam(cents ~ ReclassifiedTone +  
 s(relTime, bs = "ad")+
@@ -408,9 +366,10 @@ gamcvvosummary <- summary(gamcvvo)
 # Check the residual autocorrelation (should be below +/- 0.2 at lag 1 and beyond)
 acf_resid(gamcvvo, split_pred="AR.start")
 
+
 # ============================================================================
 
-# This section creates plots
+# This section creates plots and is in order of appearance by Figure in the associated JIPA article
 library(ggplot2)
 library(ggpubr)
 
