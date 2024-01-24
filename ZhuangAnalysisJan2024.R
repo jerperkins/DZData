@@ -93,7 +93,7 @@ tonevdur <- emmeans(lmvdur3, specs = pairwise ~ ReclassifiedTone)
 tonesvduremm <- emmeans(lmvdur3, ~ ReclassifiedTone , type="response")
 tonesvduremmdf <- as.data.frame(tonesvduremm)
 # Re-order the levels for ReclassifiedTone
-tonesvduremmdf$ReclassifiedTone <- factor(tonesvduremmdf$ReclassifiedTone, levels(tonesvduremmdf$ReclassifiedTone)[c(10,9,8,7,6,5,4,3,2,1)])
+tonesvduremmdf$ReclassifiedTone <- factor(tonesvduremmdf$ReclassifiedTone, levels(tonesvduremmdf$ReclassifiedTone)[c(8,7,10,9,6,5,4,3,2,1)])
 
 # ==================
 
@@ -461,8 +461,9 @@ themedur = theme(plot.title = element_text(size = axtisize, hjust = 0.5, family 
 	
 # Set the theme for the duration plots across speakers (with axis labels)
 themedurbasic = theme(plot.title = element_text(size = 14, hjust = 0.5, family = fonttype),
+	axis.title = element_text(size = 12, family = fonttype),
 	legend.title=element_text(size= 12, family = fonttype),
-	axis.text = element_text(size= 12, family = fonttype),
+	axis.text = element_text(size= 12, family = fonttype)
 )
 	
 # ===============================================================================================
